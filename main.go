@@ -64,9 +64,16 @@ func writeTar(srcPath string, tarPath string) error {
 	tw := tar.NewWriter(f)
 	defer tw.Close()
 
-	err = filepath.Walk(srcPath, func(path string, fi os.FileInfo, err error) error {
+	err = filepath.Walk(srcPath, func(path string, _ os.FileInfo, err error) error {
 		if err != nil {
 			return errors.Wrap(err, "error with dir walker")
+		}
+		// The os.FileInfo provided to the walkFn function cannot be used for our use case.
+		// Since internally filepath.Walk uses the os.Lstat method which does not follow symlinks
+		// and therefore we cannot tell if the file is a symlink to a file or a dir.
+		fi, err := os.Stat(path)
+		if err != nil {
+			return errors.Wrapf(err, "error getting os.FileInfo for path %q", path)
 		}
 		if fi.IsDir() {
 			return nil
