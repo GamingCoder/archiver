@@ -50,7 +50,7 @@ func main() {
 	if *deleteOld {
 		err = delTarsWithSameContent(targetPath, tarPath)
 		if err != nil {
-			log.Fatalf("%+v\n", errors.Wrap(err, "error deleting old archives with same checksum"))
+			log.Fatalf("%+v\n", errors.Wrap(err, "error deleting old archives with same content"))
 		}
 	}
 }
@@ -101,25 +101,17 @@ func writeTar(srcPath string, tarPath string) error {
 }
 
 func delTarsWithSameContent(targetPath string, tarPath string) error {
-	// Generate checksum of newly generated archive
-	base := md5.New()
-	f, err := os.Open(tarPath)
-	if err != nil {
-		return errors.Wrapf(err, "error opening tar file %q", tarPath)
+	type File struct {
+		Path string
+		Fi   os.FileInfo
 	}
-	defer f.Close()
-	_, err = io.Copy(base, f)
-	if err != nil {
-		return errors.Wrapf(err, "error generating base checksum")
-	}
-	// Compare every archive in target path to checksum of new archive
-	// Delete archives with same checksum
-	err = filepath.Walk(targetPath, func(path string, fi os.FileInfo, err error) error {
+	sums := make(map[string]File)
+	err := filepath.Walk(targetPath, func(path string, fi os.FileInfo, err error) error {
 		if err != nil {
 			return errors.Wrap(err, "error with dir walker")
 		}
-		// Skip dirs and the new archive
-		if fi.IsDir() || path == tarPath {
+		// Skip dirs
+		if fi.IsDir() {
 			return nil
 		}
 		// Generate checksum of file
@@ -127,19 +119,32 @@ func delTarsWithSameContent(targetPath string, tarPath string) error {
 		if err != nil {
 			return errors.Wrapf(err, "error opening file %q", path)
 		}
-		defer f.Close()
 		sum := md5.New()
 		_, err = io.Copy(sum, f)
 		if err != nil {
 			return errors.Wrap(err, "error generating checksum")
 		}
-		// Delete file if its checksum matches the checksum of the new archive
-		if fmt.Sprintf("%x", base.Sum(nil)) == fmt.Sprintf("%x", sum.Sum(nil)) {
-			err = os.Remove(path)
-			if err != nil {
-				return errors.Wrapf(err, "error deleting file %q", path)
+		f.Close()
+		// Test if a file with the same content as the current file exists
+		// If not store info about the current file
+		if file, ok := sums[fmt.Sprintf("%x", sum.Sum(nil))]; ok {
+			// Delete the older file
+			if file.Fi.ModTime().Before(fi.ModTime()) {
+				err = os.Remove(file.Path)
+				if err != nil {
+					return errors.Wrapf(err, "error deleting file %q", file.Path)
+				}
+				sums[fmt.Sprintf("%x", sum.Sum(nil))] = File{path, fi}
+			} else {
+				err = os.Remove(path)
+				if err != nil {
+					return errors.Wrapf(err, "error deleting file %q", path)
+				}
 			}
+		} else {
+			sums[fmt.Sprintf("%x", sum.Sum(nil))] = File{path, fi}
 		}
+
 		return nil
 	})
 	if err != nil {
